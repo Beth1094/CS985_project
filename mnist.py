@@ -6,6 +6,7 @@ from datetime import datetime
 from tensorflow.examples.tutorials.mnist import input_data
 from helpers import *
 
+
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 
 # Import MNIST data
@@ -14,28 +15,33 @@ mnist = input_data.read_data_sets("/tmp/data/")
 num_classes = 10
 
 
-#fully connected one layer
-def one_hidden_layers( X, n_hidden1 = 300, n_outputs = 10, activation_func=tf.nn.sigmoid):
+    # fully connected one layer
+def one_hidden_layers(X, n_hidden1=300, n_outputs=10, activation_func=tf.nn.sigmoid):
     print("Network with one hidden layer")
     with tf.name_scope("dnn"):
-        hidden1 = neuron_layer(X, n_hidden1, name="hidden1", activation=activation_func)
-        #hidden1 = tf.nn.dropout(hidden1, dropout)
-        logits = neuron_layer(hidden1, n_outputs, name="outputs")
-    return logits
+        with tf.variable_scope("layer1"):
+            hidden1, weights1 = neuron_layer(X, n_hidden1, name="hidden1", activation=activation_func)
+            # hidden1 = tf.nn.dropout(hidden1, dropout)
+        with tf.variable_scope("layer2"):
+            logits, weights2 = neuron_layer(hidden1, n_outputs, name="outputs")
+    return logits, weights1, weights2
 
 #fully connected two layer
 def two_hidden_layers(X, n_hidden1 = 300, n_hidden2 = 100, n_outputs = 10, activation_func=tf.nn.sigmoid):
     print("Network with two hidden layers")
     with tf.name_scope("dnn"):
-        hidden1 = neuron_layer(X, n_hidden1, name="hidden1", activation=activation_func)
-        hidden2 = neuron_layer(hidden1, n_hidden2, name="hidden2", activation=activation_func)
-        #hidden2 = tf.nn.dropout(hidden2, dropout)
-        logits = neuron_layer(hidden2, n_outputs, name="outputs")
-    return logits
+        with tf.variable_scope("layer1"):
+            hidden1, weights1 = neuron_layer(X, n_hidden1, name="hidden1", activation=activation_func)
+        with tf.variable_scope("layer2"):
+            hidden2, weights2 = neuron_layer(hidden1, n_hidden2, name="hidden2", activation=activation_func)
+            #hidden2 = tf.nn.dropout(hidden2, dropout)
+        with tf.variable_scope("layer3"):
+            logits, weights3 = neuron_layer(hidden2, n_outputs, name="outputs")
+    return logits, weights1, weights2, weights3
 
 
 #fully connected network architecture training
-def mlp_network(layers, learning_rate, epochs, batches, activation_func):
+def mlp_network(layers, learning_rate, epochs, batches, activation_func, beta):
     n_inputs = 28*28  #image size is 28 by 28 pixels
     learning_rate = learning_rate
     n_epochs = epochs #number of iterations of learning
@@ -47,13 +53,22 @@ def mlp_network(layers, learning_rate, epochs, batches, activation_func):
 
 
     if layers ==1:
-        logits = one_hidden_layers(X, activation_func=activation_func)
+        with tf.variable_scope("one_layer") as scope:
+            logits, weights1, weights2 = one_hidden_layers(X, activation_func=activation_func)
+            scope.reuse_variables()
     elif layers ==2:
-        logits = two_hidden_layers(X, activation_func=activation_func)
+        with tf.variable_scope("two_layer") as scope:
+            logits, weights1, weights2, weights3 = two_hidden_layers(X, activation_func=activation_func)
+            scope.reuse_variables()
 
     with tf.name_scope("loss"):
         xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
         loss = tf.reduce_mean(xentropy, name="loss")
+        if layers ==1:
+            regularizers = tf.nn.l2_loss(weights1) + tf.nn.l2_loss(weights2)
+        elif layers ==2:
+            regularizers = tf.nn.l2_loss(weights1) + tf.nn.l2_loss(weights2) + tf.nn.l2_loss(weights3)
+        loss = tf.reduce_mean(loss + beta * regularizers)
 
     with tf.name_scope("train"):
         optimizer = tf.train.GradientDescentOptimizer(learning_rate)
@@ -98,17 +113,14 @@ def conv_net(x, dropout, activation):
     # Fully connected layer
     # Reshape conv2 output to fit fully connected layer input
     fc1 = tf.reshape(conv2, [-1, tf.Variable(tf.random_normal([7*7*64, 1024])).get_shape().as_list()[0]])
-    fc1 = neuron_layer(fc1, 1024, name = "fully_connected1", activation=activation)
+    with tf.variable_scope("layer1"):
+        fc1, weights1 = neuron_layer(fc1, 1024, name = "fully_connected1", activation=activation)
+        # Apply Dropout
+        fc1 = tf.nn.dropout(fc1, dropout)
 
-    #fc1 = tf.reshape(conv2, [-1, weights['wd1'].get_shape().as_list()[0]])
-    #fc1 = tf.add(tf.matmul(fc1, weights['wd1']), biases['bd1'])
-    #fc1 = tf.nn.relu(fc1)
-
-    # Apply Dropout
-    fc1 = tf.nn.dropout(fc1, dropout)
-
-    # Output, class prediction
-    out = neuron_layer(fc1, num_classes, name = "output_layer", activation=None)
+    with tf.variable_scope("layer2"):
+        # Output, class prediction
+        out, weights2 = neuron_layer(fc1, num_classes, name = "output_layer", activation=None)
 
     return out
 
@@ -172,8 +184,8 @@ def conv_network(learning_rate, epochs, batches, activation_func, dropout):
 
         # Calculate accuracy for 256 MNIST test images
         print("Testing Accuracy:", \
-            sess.run(accuracy, feed_dict={X: mnist.test.images[:256],
-                                      Y: mnist.test.labels[:256],
+            sess.run(accuracy, feed_dict={X: mnist.test.images,
+                                      Y: mnist.test.labels,
                                       keep_prob: 1.0}))
 
 
@@ -189,7 +201,7 @@ def network_two(learning_rate, epochs, batches):
 
     print("Sigmoid Network with One Hidden Layer")
     print("Combination Two with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
-    mlp_network(1, learning_rate, epochs, batches, activation_func=tf.nn.sigmoid)
+    mlp_network(1, learning_rate, epochs, batches, activation_func=tf.nn.sigmoid, beta=0)
 
 def network_three(learning_rate, epochs, batches):
 
@@ -201,7 +213,7 @@ def network_three(learning_rate, epochs, batches):
 def network_four(learning_rate, epochs, batches):
     print("Sigmoid Network with Two Hidden Layers")
     print("Combination Four with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
-    mlp_network(2, learning_rate, epochs, batches, activation_func=tf.nn.sigmoid)
+    mlp_network(2, learning_rate, epochs, batches, activation_func=tf.nn.sigmoid, beta=0.01)
 
 
 

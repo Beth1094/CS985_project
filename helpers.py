@@ -2,6 +2,7 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 def show_images(X,y):
     plt.figure(figsize=(10,10))
     for i in range(25):
@@ -20,14 +21,17 @@ def neuron_layer(X, n_neurons, name, activation=None): #initialises neurons in l
     with tf.name_scope(name):
         n_inputs = int(X.get_shape()[1])
         stddev = 2.0 / np.sqrt(n_inputs + n_neurons)
-        init = tf.truncated_normal((n_inputs, n_neurons), stddev=stddev)
-        W = tf.Variable(init, name="kernel")
+        #init = tf.truncated_normal((n_inputs, n_neurons), stddev=stddev)
+        #W = tf.Variable(init, name="kernel")
+        W = tf.get_variable("weights", shape=(n_inputs, n_neurons),
+                            initializer=tf.truncated_normal_initializer(stddev=stddev))
         b = tf.Variable(tf.zeros([n_neurons]),name="bias")
         Z = tf.matmul(X,W) + b
         if activation is not None:
-            return activation(Z)
+            return activation(Z), W
         else:
-            return Z
+            return Z, W
+
 
 
 def heavy_side(z, name=None):
