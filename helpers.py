@@ -16,21 +16,19 @@ def show_images(X,y):
 
 
 
-def neuron_layer(X, n_neurons, name, activation=None): #initialises neurons in layer and performs activation function on input
+def neuron_layer(X, n_neurons, name, lambdaReg, activation=None): #initialises neurons in layer and performs activation function on input
     #X: inputs, n_neurons: outputs
     with tf.name_scope(name):
         n_inputs = int(X.get_shape()[1])
         stddev = 2.0 / np.sqrt(n_inputs + n_neurons)
-        #init = tf.truncated_normal((n_inputs, n_neurons), stddev=stddev)
-        #W = tf.Variable(init, name="kernel")
         W = tf.get_variable("weights", shape=(n_inputs, n_neurons),
-                            initializer=tf.truncated_normal_initializer(stddev=stddev))
+                            initializer=tf.truncated_normal_initializer(stddev=stddev),regularizer=tf.contrib.layers.l2_regularizer(lambdaReg))
         b = tf.Variable(tf.zeros([n_neurons]),name="bias")
         Z = tf.matmul(X,W) + b
         if activation is not None:
-            return activation(Z), W
+            return activation(Z)
         else:
-            return Z, W
+            return Z
 
 
 
