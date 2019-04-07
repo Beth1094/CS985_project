@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 from datetime import datetime
 from tensorflow.examples.tutorials.mnist import input_data
+from datetime import datetime
 from helpers import *
 
 
@@ -14,6 +15,7 @@ from tensorflow.examples.tutorials.mnist import input_data
 mnist = input_data.read_data_sets("/tmp/data/")
 num_classes = 10
 lambdaReg=0.
+#dropout=1.
 
 
 # fully connected one layer
@@ -63,6 +65,9 @@ def mlp_network(layers, learning_rate, epochs, batches, activation_func):
     n_epochs = epochs #number of iterations of learning
     batch_size = batches
 
+    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    log_dir = "logs_combination2/run-{}".format(now)
+
     X = tf.placeholder(tf.float32, shape=(None, n_inputs), name="X")
     y = tf.placeholder(tf.int64, shape=(None), name="y")
     #keep_prob = tf.placeholder(tf.float32) # dropout placeholder(keep probability)
@@ -86,14 +91,20 @@ def mlp_network(layers, learning_rate, epochs, batches, activation_func):
         xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
         loss = tf.reduce_mean(xentropy, name="loss") + reg_losses/784
 
-
     with tf.name_scope("train"):
         optimizer = tf.train.GradientDescentOptimizer(learning_rate)
         training_op = optimizer.minimize(loss)
 
     with tf.name_scope("eval"):
         correct = tf.nn.in_top_k(logits, y ,1) #tests whether targets are in top k predictions
-        accuracy = tf.reduce_mean( tf.cast( correct, tf.float32) )
+        accuracy = tf.reduce_mean( tf.cast( correct, tf.float32))
+
+
+    #Added in logging variables after the construction phase
+    # first create a node in the graph that writes the accuracy to a TensorBoard Compatiable binary
+    acc_summary = tf.summary.scalar("accuracy", accuracy)
+    # sets up the writer which will we call to write the values
+    file_writer = tf.summary.FileWriter(log_dir, tf.get_default_graph())
 
     init = tf.global_variables_initializer()
     saver = tf.train.Saver()
@@ -107,19 +118,27 @@ def mlp_network(layers, learning_rate, epochs, batches, activation_func):
             acc_train = accuracy.eval(feed_dict={X:X_batch, y:y_batch})
             acc_val = accuracy.eval(feed_dict={X: mnist.validation.images, y:mnist.validation.labels})
 
+            # Log out the summary string containing the accuracy values
+            if iteration % 10 ==0:
+                summary_str = acc_summary.eval(feed_dict={X: X_batch, y: y_batch})
+                step = epoch * batch_size + iteration
+                file_writer.add_summary(summary_str, step)
+
             print(epoch, "Train Accuracy: {:3f}  Validation Accuracy: {:3f}".format(acc_train, acc_val), end="\r")
 
-        save_path = saver.save(sess,"tmp/my_model_final.ckpt")
+        filename = 'tmp/mnist-{comb}-{LR}-{epoch}-{batch}.ckpt'.format(comb="2", LR=str(learning_rate), epoch=str(epochs), batch=str(batches))
+        save_path = saver.save(sess, filename)
+
         print("")
         print("Optimization Finished!")
 
         acc_test = accuracy.eval(feed_dict={X: mnist.test.images, y:mnist.test.labels})
         print("Test Accuracy: {:3f}".format(acc_test))
-
+    file_writer.close()
 
 #----------------------------------------------------------------------------------------------------------------
 
-# Covolutional layer with pooling x2 and 1 fc layer before output
+# Covolutional layer with pooling x2 and 2 fc layer before output
 def conv_net(x, dropout, activation, lambdaReg):
     # MNIST data input is a 1-D vector of 784 features (28*28 pixels)
     # Reshape to match picture format [Height x Width x Channel]
@@ -146,15 +165,16 @@ def conv_net(x, dropout, activation, lambdaReg):
     return out
 
 
-#dropout: probability to keep units
-#train CNN with dropout
+#train CNN with dropout and regularisation
 def conv_network(learning_rate, epochs, batches, activation_func, dropout):
     display_step = 10
     n_inputs = 28*28  #image size is 28 by 28 pixels
     learning_rate = learning_rate
     n_epochs = epochs #number of iterations of learning
     batch_size = batches
-    lambdaReg = 0
+
+    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    log_dir = "logs_combination1/run-{}".format(now)
 
     # tf Graph input
     X = tf.placeholder(tf.float32, shape=(None, n_inputs), name="X")
@@ -167,8 +187,11 @@ def conv_network(learning_rate, epochs, batches, activation_func, dropout):
     #prediction = tf.nn.softmax(logits)
 
     # Define loss and optimizer
+    reg_losses = tf.reduce_sum(tf.get_collection(tf.GraphKeys.REGULARIZATION_LOSSES))
     loss_op = tf.reduce_mean(tf.nn.sparse_softmax_cross_entropy_with_logits(
-        logits=logits, labels=Y))
+        logits=logits, labels=Y)) + reg_losses/784
+
+
     optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate)
     train_op = optimizer.minimize(loss_op)
 
@@ -176,6 +199,12 @@ def conv_network(learning_rate, epochs, batches, activation_func, dropout):
     # Evaluate model
     correct_pred = tf.nn.in_top_k(logits, Y ,1)# tf.equal(tf.argmax(prediction, 1), tf.argmax(Y, 1))
     accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+
+    #Added in logging variables after the construction phase
+    # first create a node in the graph that writes the accuracy to a TensorBoard Compatiable binary
+    acc_summary = tf.summary.scalar("accuracy", accuracy)
+    # sets up the writer which will we call to write the values
+    file_writer = tf.summary.FileWriter(log_dir, tf.get_default_graph())
 
     # Initialize the variables (i.e. assign their default value)
     init = tf.global_variables_initializer()
@@ -203,7 +232,14 @@ def conv_network(learning_rate, epochs, batches, activation_func, dropout):
 
                 print(epoch, "Train Accuracy: {:3f}  Validation Accuracy: {:3f}".format(acc, acc_val), end="\r")
 
-        save_path = saver.save(sess, "tmp/my_model_final.ckpt")
+            # Log out the summary string containing the accuracy values
+                summary_str = acc_summary.eval(feed_dict={X: batch_x, Y: batch_y, keep_prob:1.0})
+                step = epoch
+                file_writer.add_summary(summary_str, step)
+
+        filename = 'tmp/mnist-{comb}-{LR}-{epoch}-{batch}.ckpt'.format(comb="1", LR=str(learning_rate),
+                                                                       epoch=str(epochs), batch=str(batches))
+        save_path = saver.save(sess, filename)
         print("")
         print("Optimization Finished!")
 
@@ -213,11 +249,13 @@ def conv_network(learning_rate, epochs, batches, activation_func, dropout):
                                       Y: mnist.test.labels[0:256],
                                       keep_prob: 1.0}))
 
+    file_writer.close()
+
 
 #-----------------------------------------------------------------------------------------
 def network_one(learning_rate, epochs, batches):
 
-    print("CNN with two convolutional layers, two pooling layers and one FC layer")
+    print("CNN with two convolutional layers, two pooling layers and two FC layers")
     print("Combination One with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
     conv_network(learning_rate, epochs, batches, activation_func=tf.nn.relu, dropout=0.5)
 
@@ -226,7 +264,7 @@ def network_two(learning_rate, epochs, batches):
 
     print("Sigmoid Network with Three Hidden Layers")
     print("Combination Two with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
-    mlp_network(3, learning_rate, epochs, batches, activation_func=tf.nn.sigmoid)
+    mlp_network(2, learning_rate, epochs, batches, activation_func=tf.nn.sigmoid)
 
 
 
