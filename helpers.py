@@ -1,6 +1,6 @@
 import tensorflow as tf
-import matplotlib.pyplot as plt
 import numpy as np
+from datetime import datetime
 
 
 #initialises neurons in layer and performs activation function on input
@@ -57,3 +57,26 @@ def conv2d(input_data, num_input_channels, num_filters, filter_shape, stride, po
                                padding='SAME')
 
     return out_layer
+
+
+def reset_graph(seed=42):
+    tf.reset_default_graph()
+    tf.set_random_seed(seed)
+    np.random.seed(seed)
+
+
+def log_dir(prefix=""):
+    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    root_logdir = "tf_logs"
+    if prefix:
+        prefix += "-"
+    name = prefix + "run-" + now
+    return "{}/{}/".format(root_logdir, name)
+
+
+def shuffle_batch(X, y, batch_size):
+    rnd_idx = np.random.permutation(len(X))
+    n_batches = int(np.ceil(len(X) / batch_size))
+    for batch_idx in np.array_split(rnd_idx, n_batches):
+        X_batch, y_batch = X[batch_idx], y[batch_idx]
+        yield X_batch, y_batch
