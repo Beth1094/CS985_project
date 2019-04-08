@@ -14,7 +14,7 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 from tensorflow.examples.tutorials.mnist import input_data
 mnist = input_data.read_data_sets("/tmp/data/")
 num_classes = 10
-lambdaReg=0.
+lambdaReg=0.4
 #dropout=1.
 
 
