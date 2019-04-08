@@ -1,28 +1,13 @@
+from __future__ import division, print_function, unicode_literals
 from sklearn.datasets import fetch_covtype
 from sklearn.utils import check_array
 import numpy as np
 import tensorflow as tf
-from helpers import heavy_side, leaky_relu
+from helpers2 import heavy_side, leaky_relu, neuron_layer, reset_graph, log_dir, shuffle_batch
 import os
-from datetime import datetime
 import argparse
 
-def reset_graph(seed=42):
-    tf.reset_default_graph()
-    tf.set_random_seed(seed)
-    np.random.seed(seed)
-
-def log_dir(prefix=""):
-    now = datetime.utcnow().strftime("%Y%m%d%H%M%S")
-    root_logdir = "tf_logs"
-    if prefix:
-        prefix += "-"
-    name = prefix + "run-" + now
-    return "{}/{}/".format(root_logdir, name)
-
-
-
-#### download data####
+############## download dataset and preprocessing ##################
 
 print("Loading dataset...")
 data = fetch_covtype(download_if_missing=True, shuffle=True,
@@ -54,36 +39,33 @@ print(len(X_train), len(X_valid), len(X_test))
 
 
 
-m, n = X_train.shape
+############################ two hidden layers function #################################
 
-def shuffle_batch(X, y, batch_size):
-    rnd_idx = np.random.permutation(len(X))
-    n_batches = int(np.ceil(m / batch_size))
-    for batch_idx in np.array_split(rnd_idx, n_batches):
-        X_batch, y_batch = X[batch_idx], y[batch_idx]
-        yield X_batch, y_batch
-
-
-
-#### two hidden layers function #####
-
-def two_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2, n_epochs):
+def two_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2, n_epochs, trainoptimizer):
     n_inputs = 54  # no. of variable
     n_outputs = 7  # no. of class
+    dropout_rate = 0.5
+    lambdaReg = 0.0
 
-    logdir = log_dir("forestbook12_dnn")
+    logdir = log_dir("forestbook_dnn")
     file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
 
     reset_graph()
     X = tf.placeholder(tf.float32, shape=(None, n_inputs), name="X")
     y = tf.placeholder(tf.int32, shape=(None), name="y")
 
+    training = tf.placeholder_with_default(False, shape=(), name='training')
+    X_drop = tf.layers.dropout(X, dropout_rate, training=training)
+
     with tf.name_scope("dnn"):
-        he_init = tf.contrib.layers.variance_scaling_initializer()
-        hidden1 = tf.layers.dense(X, n_hidden1, name="hidden1", activation=activation_fnc, kernel_initializer=he_init)
-        hidden2 = tf.layers.dense(hidden1, n_hidden2, name="hidden2", activation=activation_fnc,
-                                  kernel_initializer=he_init)
-        logits = tf.layers.dense(hidden2, n_outputs, name="outputs", kernel_initializer=he_init)
+        with tf.variable_scope("layer1"):
+            hidden1 = neuron_layer(X, n_hidden1, "hidden1", lambdaReg, activation=activation_fnc)
+            hidden1_drop = tf.layers.dropout(hidden1, dropout_rate, training=training)
+        with tf.variable_scope("layer2"):
+            hidden2 = neuron_layer(hidden1_drop, n_hidden2, "hidden2", lambdaReg, activation=activation_fnc)
+            hidden2_drop = tf.layers.dropout(hidden2, dropout_rate, training=training)
+        with tf.variable_scope("layer3"):
+            logits = neuron_layer(hidden2_drop, n_outputs, "outputs", lambdaReg)
 
     with tf.name_scope("loss"):
         xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
@@ -91,7 +73,7 @@ def two_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2,
         loss_summary = tf.summary.scalar('log_loss', loss)
 
     with tf.name_scope("train"):
-        optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+        optimizer = trainoptimizer(learning_rate)
         training_op = optimizer.minimize(loss)
 
     with tf.name_scope("eval"):
@@ -102,47 +84,91 @@ def two_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2,
     init = tf.global_variables_initializer()
     saver = tf.train.Saver()
 
-    final_model_path = "./my_model_final.ckpt"
+    checkpoint_path = "/tmp/my_deep_forest_model.ckpt"
+    checkpoint_epoch_path = checkpoint_path + ".epoch"
+    final_model_path = "./my_deep_forest_model"
+
+    best_loss = np.infty
+    epochs_without_progress = 0
+    max_epochs_without_progress = 50
 
     with tf.Session() as sess:
-        init.run()
-        for epoch in range(n_epochs):
+        if os.path.isfile(checkpoint_epoch_path):
+            # if the checkpoint file exists, restore the model and load the epoch number
+            with open(checkpoint_epoch_path, "rb") as f:
+                start_epoch = int(f.read())
+            print("Training was interrupted. Continuing at epoch", start_epoch)
+            saver.restore(sess, checkpoint_path)
+        else:
+            start_epoch = 0
+            sess.run(init)
+
+        for epoch in range(start_epoch, n_epochs):
             for X_batch, y_batch in shuffle_batch(X_train, y_train, batch_size):
                 sess.run(training_op, feed_dict={X: X_batch, y: y_batch})
-            acc_batch = accuracy.eval(feed_dict={X: X_batch, y: y_batch})
-            acc_valid = accuracy.eval(feed_dict={X: X_valid, y: y_valid})
+            accuracy_batch = accuracy.eval(feed_dict={X: X_batch, y: y_batch})
+            accuracy_val, loss_val, accuracy_summary_str, loss_summary_str = sess.run(
+                [accuracy, loss, accuracy_summary, loss_summary], feed_dict={X: X_valid, y: y_valid})
+            file_writer.add_summary(accuracy_summary_str, epoch)
+            file_writer.add_summary(loss_summary_str, epoch)
             if epoch % 10 == 0:
-                print(epoch, "Batch accuracy:", acc_batch, "Validation accuracy:", acc_valid)
+                print("Epoch:", epoch,
+                      "\tBatch accuracy: {:.3f}%".format(accuracy_batch * 100),
+                      "\tLoss: {:.5f}".format(loss_val),
+                      "\tValidation accuracy: {:.3f}%".format(accuracy_val * 100),
+                      "\tLoss: {:.5f}".format(loss_val))
+                saver.save(sess, checkpoint_path)
+                with open(checkpoint_epoch_path, "wb") as f:
+                    f.write(b"%d" % (epoch + 1))
+                if loss_val < best_loss:
+                    saver.save(sess, final_model_path)
+                    best_loss = loss_val
 
-        save_path = saver.save(sess, "./my_model_final.ckpt")
+                else:
+                    epochs_without_progress += 5
+                    if epochs_without_progress > max_epochs_without_progress:
+                        print("Early stopping")
+                        break
+
+    os.remove(checkpoint_epoch_path)
 
     with tf.Session() as sess:
         saver.restore(sess, final_model_path)
-        accuracy_val = accuracy.eval(feed_dict={X: X_test, y: y_test})
-        print("Test accuracy", accuracy_val)
+        accuracy_test = accuracy.eval(feed_dict={X: X_test, y: y_test})
+
+    print("\tTest accuracy: {:.3f}%".format(accuracy_test * 100))
 
 
-#### three hidden layers function ####
+############################ three hidden layers function ##############################
 
-def three_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2, n_hidden3, n_epochs):
+def three_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2, n_hidden3, n_epochs, trainoptimizer):
     n_inputs = 54  # no. of variable
     n_outputs = 7  # no. of class
+    dropout_rate = 0.5
+    lambdaReg = 0.0
 
-    logdir = log_dir("forestbook12_dnn")
+    logdir = log_dir("forestbook_dnn")
     file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
 
     reset_graph()
     X = tf.placeholder(tf.float32, shape=(None, n_inputs), name="X")
     y = tf.placeholder(tf.int32, shape=(None), name="y")
 
+    training = tf.placeholder_with_default(False, shape=(), name='training')
+    X_drop = tf.layers.dropout(X, dropout_rate, training=training)
+
     with tf.name_scope("dnn"):
-        he_init = tf.contrib.layers.variance_scaling_initializer()
-        hidden1 = tf.layers.dense(X, n_hidden1, name="hidden1", activation=activation_fnc, kernel_initializer=he_init)
-        hidden2 = tf.layers.dense(hidden1, n_hidden2, name="hidden2", activation=activation_fnc,
-                                  kernel_initializer=he_init)
-        hidden3 = tf.layers.dense(hidden2, n_hidden3, name="hidden3", activation=activation_fnc,
-                                  kernel_initializer=he_init)
-        logits = tf.layers.dense(hidden3, n_outputs, name="outputs", kernel_initializer=he_init)
+        with tf.variable_scope("layer1"):
+            hidden1 = neuron_layer(X, n_hidden1, "hidden1", lambdaReg, activation=activation_fnc)
+            hidden1_drop = tf.layers.dropout(hidden1, dropout_rate, training=training)
+        with tf.variable_scope("layer2"):
+            hidden2 = neuron_layer(hidden1_drop, n_hidden2, "hidden2", lambdaReg, activation=activation_fnc)
+            hidden2_drop = tf.layers.dropout(hidden2, dropout_rate, training=training)
+        with tf.variable_scope("layer3"):
+            hidden3 = neuron_layer(hidden2_drop, n_hidden3, "hidden3", lambdaReg, activation=activation_fnc)
+            hidden3_drop = tf.layers.dropout(hidden3, dropout_rate, training=training)
+        with tf.variable_scope("layer4"):
+            logits = neuron_layer(hidden3_drop, n_outputs, "outputs", lambdaReg)
 
     with tf.name_scope("loss"):
         xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
@@ -150,7 +176,7 @@ def three_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden
         loss_summary = tf.summary.scalar('log_loss', loss)
 
     with tf.name_scope("train"):
-        optimizer = tf.train.GradientDescentOptimizer(learning_rate)
+        optimizer = trainoptimizer(learning_rate)
         training_op = optimizer.minimize(loss)
 
     with tf.name_scope("eval"):
@@ -161,38 +187,183 @@ def three_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden
     init = tf.global_variables_initializer()
     saver = tf.train.Saver()
 
-    final_model_path = "./my_model_final.ckpt"
+    checkpoint_path = "/tmp/my_deep_forest_model.ckpt"
+    checkpoint_epoch_path = checkpoint_path + ".epoch"
+    final_model_path = "./my_deep_forest_model"
+
+    best_loss = np.infty
+    epochs_without_progress = 0
+    max_epochs_without_progress = 50
 
     with tf.Session() as sess:
-        init.run()
-        for epoch in range(n_epochs):
+        if os.path.isfile(checkpoint_epoch_path):
+            # if the checkpoint file exists, restore the model and load the epoch number
+            with open(checkpoint_epoch_path, "rb") as f:
+                start_epoch = int(f.read())
+            print("Training was interrupted. Continuing at epoch", start_epoch)
+            saver.restore(sess, checkpoint_path)
+        else:
+            start_epoch = 0
+            sess.run(init)
+
+        for epoch in range(start_epoch, n_epochs):
             for X_batch, y_batch in shuffle_batch(X_train, y_train, batch_size):
                 sess.run(training_op, feed_dict={X: X_batch, y: y_batch})
-            acc_batch = accuracy.eval(feed_dict={X: X_batch, y: y_batch})
-            acc_valid = accuracy.eval(feed_dict={X: X_valid, y: y_valid})
+            accuracy_batch = accuracy.eval(feed_dict={X: X_batch, y: y_batch})
+            accuracy_val, loss_val, accuracy_summary_str, loss_summary_str = sess.run(
+                [accuracy, loss, accuracy_summary, loss_summary], feed_dict={X: X_valid, y: y_valid})
+            file_writer.add_summary(accuracy_summary_str, epoch)
+            file_writer.add_summary(loss_summary_str, epoch)
             if epoch % 10 == 0:
-                print(epoch, "Batch accuracy:", acc_batch, "Validation accuracy:", acc_valid)
+                print("Epoch:", epoch,
+                      "\tBatch accuracy: {:.3f}%".format(accuracy_batch * 100),
+                      "\tLoss: {:.5f}".format(loss_val),
+                      "\tValidation accuracy: {:.3f}%".format(accuracy_val * 100),
+                      "\tLoss: {:.5f}".format(loss_val))
+                saver.save(sess, checkpoint_path)
+                with open(checkpoint_epoch_path, "wb") as f:
+                    f.write(b"%d" % (epoch + 1))
+                if loss_val < best_loss:
+                    saver.save(sess, final_model_path)
+                    best_loss = loss_val
 
-        save_path = saver.save(sess, "./my_model_final.ckpt")
+                else:
+                    epochs_without_progress += 5
+                    if epochs_without_progress > max_epochs_without_progress:
+                        print("Early stopping")
+                        break
+
+    os.remove(checkpoint_epoch_path)
 
     with tf.Session() as sess:
         saver.restore(sess, final_model_path)
-        accuracy_val = accuracy.eval(feed_dict={X: X_test, y: y_test})
-        print("Test accuracy", accuracy_val)
+        accuracy_test = accuracy.eval(feed_dict={X: X_test, y: y_test})
+
+    print("\tTest accuracy: {:.3f}%".format(accuracy_test * 100))
 
 
+############################ four hidden layers function ##############################
+
+def four_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2, n_hidden3, n_hidden4, n_epochs,
+                 trainoptimizer):
+    n_inputs = 54  # no. of variable
+    n_outputs = 7  # no. of class
+    dropout_rate = 0.5
+    lambdaReg = 0.0
+
+    logdir = log_dir("forestbook_dnn")
+    file_writer = tf.summary.FileWriter(logdir, tf.get_default_graph())
+
+    reset_graph()
+    X = tf.placeholder(tf.float32, shape=(None, n_inputs), name="X")
+    y = tf.placeholder(tf.int32, shape=(None), name="y")
+
+    training = tf.placeholder_with_default(False, shape=(), name='training')
+    X_drop = tf.layers.dropout(X, dropout_rate, training=training)
+
+    with tf.name_scope("dnn"):
+        with tf.variable_scope("layer1"):
+            hidden1 = neuron_layer(X, n_hidden1, "hidden1", lambdaReg, activation=activation_fnc)
+            hidden1_drop = tf.layers.dropout(hidden1, dropout_rate, training=training)
+        with tf.variable_scope("layer2"):
+            hidden2 = neuron_layer(hidden1_drop, n_hidden2, "hidden2", lambdaReg, activation=activation_fnc)
+            hidden2_drop = tf.layers.dropout(hidden2, dropout_rate, training=training)
+        with tf.variable_scope("layer3"):
+            hidden3 = neuron_layer(hidden2_drop, n_hidden3, "hidden3", lambdaReg, activation=activation_fnc)
+            hidden3_drop = tf.layers.dropout(hidden3, dropout_rate, training=training)
+        with tf.variable_scope("layer4"):
+            hidden4 = neuron_layer(hidden3_drop, n_hidden4, "hidden4", lambdaReg, activation=activation_fnc)
+            hidden4_drop = tf.layers.dropout(hidden4, dropout_rate, training=training)
+        with tf.variable_scope("layer5"):
+            logits = neuron_layer(hidden4_drop, n_outputs, "outputs", lambdaReg)
+
+    with tf.name_scope("loss"):
+        xentropy = tf.nn.sparse_softmax_cross_entropy_with_logits(labels=y, logits=logits)
+        loss = tf.reduce_mean(xentropy, name="loss")
+        loss_summary = tf.summary.scalar('log_loss', loss)
+
+    with tf.name_scope("train"):
+        optimizer = trainoptimizer(learning_rate)
+        training_op = optimizer.minimize(loss)
+
+    with tf.name_scope("eval"):
+        correct = tf.nn.in_top_k(logits, y, 1)
+        accuracy = tf.reduce_mean(tf.cast(correct, tf.float32))
+        accuracy_summary = tf.summary.scalar('accuracy', accuracy)
+
+    init = tf.global_variables_initializer()
+    saver = tf.train.Saver()
+
+    checkpoint_path = "/tmp/my_deep_forest_model.ckpt"
+    checkpoint_epoch_path = checkpoint_path + ".epoch"
+    final_model_path = "./my_deep_forest_model"
+
+    best_loss = np.infty
+    epochs_without_progress = 0
+    max_epochs_without_progress = 50
+
+    with tf.Session() as sess:
+        if os.path.isfile(checkpoint_epoch_path):
+            # if the checkpoint file exists, restore the model and load the epoch number
+            with open(checkpoint_epoch_path, "rb") as f:
+                start_epoch = int(f.read())
+            print("Training was interrupted. Continuing at epoch", start_epoch)
+            saver.restore(sess, checkpoint_path)
+        else:
+            start_epoch = 0
+            sess.run(init)
+
+        for epoch in range(start_epoch, n_epochs):
+            for X_batch, y_batch in shuffle_batch(X_train, y_train, batch_size):
+                sess.run(training_op, feed_dict={X: X_batch, y: y_batch})
+            accuracy_batch = accuracy.eval(feed_dict={X: X_batch, y: y_batch})
+            accuracy_val, loss_val, accuracy_summary_str, loss_summary_str = sess.run(
+                [accuracy, loss, accuracy_summary, loss_summary], feed_dict={X: X_valid, y: y_valid})
+            file_writer.add_summary(accuracy_summary_str, epoch)
+            file_writer.add_summary(loss_summary_str, epoch)
+            if epoch % 10 == 0:
+                print("Epoch:", epoch,
+                      "\tBatch accuracy: {:.3f}%".format(accuracy_batch * 100),
+                      "\tLoss: {:.5f}".format(loss_val),
+                      "\tValidation accuracy: {:.3f}%".format(accuracy_val * 100),
+                      "\tLoss: {:.5f}".format(loss_val))
+                saver.save(sess, checkpoint_path)
+                with open(checkpoint_epoch_path, "wb") as f:
+                    f.write(b"%d" % (epoch + 1))
+                if loss_val < best_loss:
+                    saver.save(sess, final_model_path)
+                    best_loss = loss_val
+
+                else:
+                    epochs_without_progress += 5
+                    if epochs_without_progress > max_epochs_without_progress:
+                        print("Early stopping")
+                        break
+
+    os.remove(checkpoint_epoch_path)
+
+    with tf.Session() as sess:
+        saver.restore(sess, final_model_path)
+        accuracy_test = accuracy.eval(feed_dict={X: X_test, y: y_test})
+
+    print("\tTest accuracy: {:.3f}%".format(accuracy_test * 100))
+
+
+###########################################################
 
 def network_one(learning_rate, epochs, batches):
 
-    print("Network with Two Hidden Layers")
-    print("Combination Three with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
-    two_hlayers(learning_rate, batch_size = batches, activation_fnc = tf.nn.sigmoid, n_hidden1 =50, n_hidden2 =50, n_epochs = epochs)
+    print("ELU Network with Four Hidden Layer")
+    print("Combination one with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
+    four_hlayers(learning_rate, batch_size = batches, activation_fnc = tf.nn.elu, n_hidden1 =50, n_hidden2 =40, n_hidden3 =30, n_hidden4=20, n_epochs =epochs,
+                 trainoptimizer = tf.train.AdamOptimizer)
 
 
 def network_two(learning_rate, epochs, batches):
-    print("Sigmoid Network with Three Hidden Layer")
-    print("Combination Four with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
-    three_hlayers(learning_rate, batch_size = batches, activation_fnc = tf.nn.sigmoid, n_hidden1=50, n_hidden2 =30, n_hidden3 =20, n_epochs = epochs)
+    print("ReLU Network with Three Hidden Layer")
+    print("Combination two with learning rate: {} epochs: {} and batch size: {}".format(learning_rate, epochs, batches))
+    three_hlayers(learning_rate, batch_size = batches, activation_fnc = tf.nn.relu, n_hidden1 =50, n_hidden2 =50, n_hidden3 =50, n_epochs = epochs, trainoptimizer = tf.train.GradientDescentOptimizer)
+
 
 
 
