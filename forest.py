@@ -86,7 +86,8 @@ def two_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2,
 
     checkpoint_path = "/tmp/my_deep_forest_model.ckpt"
     checkpoint_epoch_path = checkpoint_path + ".epoch"
-    final_model_path = "./my_deep_forest_model"
+    final_model_path = 'tmp/forest-{comb}-{LR}-{epoch}-{batch}.ckpt'.format(comb="3", LR=str(learning_rate),
+                                                                       epoch=str(n_epochs), batch=str(batch_size))
 
     best_loss = np.infty
     epochs_without_progress = 0
@@ -189,7 +190,8 @@ def three_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden
 
     checkpoint_path = "/tmp/my_deep_forest_model.ckpt"
     checkpoint_epoch_path = checkpoint_path + ".epoch"
-    final_model_path = "./my_deep_forest_model"
+    final_model_path = 'tmp/forest-{comb}-{LR}-{epoch}-{batch}.ckpt'.format(comb="2", LR=str(learning_rate),
+                                                                       epoch=str(n_epochs), batch=str(batch_size))
 
     best_loss = np.infty
     epochs_without_progress = 0
@@ -296,7 +298,8 @@ def four_hlayers(learning_rate, batch_size, activation_fnc, n_hidden1, n_hidden2
 
     checkpoint_path = "/tmp/my_deep_forest_model.ckpt"
     checkpoint_epoch_path = checkpoint_path + ".epoch"
-    final_model_path = "./my_deep_forest_model"
+    final_model_path = 'tmp/forest-{comb}-{LR}-{epoch}-{batch}.ckpt'.format(comb="1", LR=str(learning_rate),
+                                                                       epoch=str(n_epochs), batch=str(batch_size))
 
     best_loss = np.infty
     epochs_without_progress = 0
