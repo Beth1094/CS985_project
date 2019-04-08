@@ -3,7 +3,7 @@ from sklearn.datasets import fetch_covtype
 from sklearn.utils import check_array
 import numpy as np
 import tensorflow as tf
-from helpers2 import heavy_side, leaky_relu, neuron_layer, reset_graph, log_dir, shuffle_batch
+from helpers import heavy_side, leaky_relu, neuron_layer, reset_graph, log_dir, shuffle_batch
 import os
 import argparse
 
